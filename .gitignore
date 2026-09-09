@@ -1,4 +1,2 @@
 .dsh-tray/
 *.lnk
-target/
-sandbox-probe.tmp
