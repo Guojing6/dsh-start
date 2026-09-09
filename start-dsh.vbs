@@ -1,10 +1,8 @@
-' Double-click to start DSH Web in the system tray (no console window).
-' Keeps dsh-tray.ps1 (same folder) running hidden in the background.
+' Double-click to start DSH Web in the system tray.
 Option Explicit
-Dim shell, fso, folder, ps1, cmd
+Dim shell, fso, folder, exe
 Set shell = CreateObject("WScript.Shell")
 Set fso   = CreateObject("Scripting.FileSystemObject")
 folder = fso.GetParentFolderName(WScript.ScriptFullName)
-ps1 = folder & "\dsh-tray.ps1"
-cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Sta -WindowStyle Hidden -File " & Chr(34) & ps1 & Chr(34)
-shell.Run cmd, 0, False
+exe = folder & "\dsh-start.exe"
+shell.Run Chr(34) & exe & Chr(34), 0, False
