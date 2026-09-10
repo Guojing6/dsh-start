@@ -21,7 +21,7 @@ $VbsPath  = Join-Path $PSScriptRoot 'start-dsh.vbs'
 $BinPath  = Join-Path $env:APPDATA 'npm\node_modules\@deepseek-ai\dsh\lib\bin.js'
 
 $Port = 3080
-$WebUrl = "http://127.0.0.1:$Port"
+$BaseUrl = "http://127.0.0.1:$Port"
 
 # ---------- 异步状态机（全部由 UI 计时器驱动，绝不阻塞消息循环） ----------
 # State: idle | delay | wait | done | fail
@@ -32,9 +32,12 @@ $script:ChildPid     = $null    # 本次由我们拉起的 node 进程
 $script:Attach       = $false   # 本次是接管已在运行的服务（非自己拉起）
 $script:Exiting      = $false
 $script:OpenWhenReady= $true    # 服务就绪后自动打开 WebUI
+$script:WebUrl       = $null    # dsh web 打印的带认证 token 的 URL
 $script:PortPidCachePort = $null
 $script:PortPidCacheAt = [datetime]::MinValue
 $script:PortPidCacheValue = $null
+$script:HttpReadyCacheAt = [datetime]::MinValue
+$script:HttpReadyCacheValue = $false
 
 # 自动化测试开关：置 1 时不真正打开浏览器（正常运行不受影响）
 $TestNoBrowser = ($env:DSH_TRAY_NOBROWSER -eq '1')
@@ -90,6 +93,9 @@ function Start-DshSpawn {           # 后台隐藏启动 node（带日志重定�
     $node = (Get-Command node -ErrorAction SilentlyContinue).Source
     if (-not $node) { $node = 'D:\nodejs\node.exe' }
     if (-not (Test-Path $BinPath)) { throw "找不到 dsh 程序: $BinPath" }
+    $script:WebUrl = $null
+    if (Test-Path $OutLog) { Clear-Content $OutLog -ErrorAction SilentlyContinue }
+    if (Test-Path $ErrLog) { Clear-Content $ErrLog -ErrorAction SilentlyContinue }
     $p = Start-Process -FilePath $node `
         -ArgumentList @($BinPath, '--profile', 'web', '--port', "$Port", '--no-open') `
         -WindowStyle Hidden `
@@ -108,23 +114,58 @@ function Stop-DshService {          # 停掉“我们的进程 + 端口占用者
     Clear-PortPidCache
 }
 function Test-HttpReady {           # 服务真正应答（任意状态码，含 401/302）才算就绪
+    $now = Get-Date
+    if ((($now - $script:HttpReadyCacheAt).TotalMilliseconds -lt 500)) {
+        return $script:HttpReadyCacheValue
+    }
+    $script:HttpReadyCacheAt = $now
     try {
-        $req = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$Port/")
-        $req.Timeout = 1000
-        $req.ReadWriteTimeout = 1000
+        $req = [System.Net.HttpWebRequest]::Create($BaseUrl + "/")
+        $req.Timeout = 350
+        $req.ReadWriteTimeout = 350
         $resp = $req.GetResponse()
         $resp.Close()
+        $script:HttpReadyCacheValue = $true
         return $true
     } catch [System.Net.WebException] {
-        if ($_.Exception.Response) { $_.Exception.Response.Close(); return $true }
+        if ($_.Exception.Response) {
+            $_.Exception.Response.Close()
+            $script:HttpReadyCacheValue = $true
+            return $true
+        }
+        $script:HttpReadyCacheValue = $false
         return $false
     } catch {
+        $script:HttpReadyCacheValue = $false
         return $false
     }
 }
+function Get-DshWebUrlFromLog {
+    if (-not (Test-Path $OutLog)) { return $null }
+    try {
+        $line = Get-Content $OutLog -Tail 20 -ErrorAction Stop |
+            Where-Object { $_ -match 'dsh web:\s+(http://\S+)' } |
+            Select-Object -Last 1
+        if ($line -and $line -match 'dsh web:\s+(http://\S+)') { return $Matches[1] }
+    } catch { }
+    return $null
+}
+function Update-WebUrlFromLog {
+    $url = Get-DshWebUrlFromLog
+    if ($url) { $script:WebUrl = $url }
+    return $script:WebUrl
+}
 function Open-WebBrowser {          # 尽力打开浏览器，打不开不影响服务
     if ($TestNoBrowser) { return }
-    try { [System.Diagnostics.Process]::Start($script:WebUrl) | Out-Null } catch { }
+    $url = Update-WebUrlFromLog
+    if (-not $url) { $url = $BaseUrl }
+    try { [System.Diagnostics.Process]::Start($url) | Out-Null } catch { }
+}
+function Open-AuthenticatedWebBrowser { # 只打开 dsh web 打印的认证 URL，避免裸地址 401
+    $url = Update-WebUrlFromLog
+    if (-not $url) { return $false }
+    Open-WebBrowser
+    return $true
 }
 function Enter-Wait([double]$waitSeconds) {   # 进入“等 HTTP 就绪”，就绪后由计时器开浏览器
     $script:State = 'wait'
@@ -145,7 +186,7 @@ function Restart-AsyncService {     # 杀旧 -> 延迟 800ms 再拉起（避开 
 }
 function Ensure-WebUp {             # 双击托盘：运行中就开 UI；否则异步启动，就绪自动开
     if (Test-Running) {
-        if (Test-HttpReady) { Open-WebBrowser }
+        if (Open-AuthenticatedWebBrowser) { $script:State = 'done' }
         else { $script:Attach = $true; Enter-Wait 10 }
         return
     }
@@ -158,7 +199,7 @@ function Attach-Or-Restart {        # 托盘启动时：同端口已是 dsh -> �
         if (Test-OwnerIsDsh -OwnerPid $owner) {
             $owner | Set-Content $PidFile
             $script:Attach = $true
-            if (Test-HttpReady) { $script:State = 'done'; Open-WebBrowser }
+            if (Open-AuthenticatedWebBrowser) { $script:State = 'done' }
             else { Enter-Wait 10 }   # 正在启动中，等就绪自动开
             return
         }
@@ -214,13 +255,12 @@ $script:Timer.Add_Tick({
                     Enter-Wait 45
                 }
             }
-            'wait' {                                   # 轮询直到 HTTP 就绪
-                if (Test-Running) {
-                    if (Test-HttpReady) {
-                        $script:Timer.Stop()
-                        $script:State = 'done'
-                        if ($script:OpenWhenReady) { Open-WebBrowser }
-                    } elseif ((Get-Date) -ge $script:Deadline) {
+            'wait' {                                   # 轮询直到认证 URL 出现
+                if (Open-AuthenticatedWebBrowser) {
+                    $script:Timer.Stop()
+                    $script:State = 'done'
+                } elseif (Test-Running) {
+                    if ((Get-Date) -ge $script:Deadline) {
                         if ($script:Attach) {
                             Restart-AsyncService      # 接管超时（不响应/外部服务）-> 停掉重启
                         } else {
