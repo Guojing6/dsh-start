@@ -1,0 +1,13 @@
+{
+  "profile": "web",
+  "preferredPort": 3080,
+  "autoOpen": true,
+  "readyTimeout": 45,
+  "restartMax": 5,
+  "restartDelays": [1, 2, 4, 8, 15],
+  "rapidExitSec": 10,
+  "keepRunLogs": 10,
+  "extraArgs": [],
+  "dshExecutable": "",
+  "dshArgsPrefix": []
+}
