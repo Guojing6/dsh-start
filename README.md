@@ -5,11 +5,11 @@
 ## 功能
 
 - 双击 `start-dsh.vbs` 后静默启动托盘程序，不弹出 PowerShell 控制台。
-- 托盘在后台拉起 `dsh --profile web --no-open`，解析官方打印的认证 URL，并用它打开 Web UI。
+- 托盘在后台拉起 `dsh --profile web --no-open`，解析官方打印的认证 URL，并用它打开网页。
 - **托盘已在运行时再次双击：立即打开已有服务**（不新起进程、不重启、几乎零等待）。
-- 双击托盘图标打开 Web UI；右键菜单支持重启服务、复制带 token 的网址、开机自启、打开状态目录、退出。
+- 双击托盘图标打开网页；右键菜单支持重启服务、复制链接、开机自启、打开日志、退出。
 - 服务就绪失败/子进程崩溃时自动退避重启，连续失败会放弃并弹出提示。
-- 日志与状态写入 `%LOCALAPPDATA%\dsh-tray`，不污染脚本目录。
+- 日志与状态写入脚本目录下的 `.dsh-tray\`（已被 `.gitignore` 忽略），路径可用 `DSH_TRAY_STATE_DIR` 覆盖。
 
 ## 文件
 
@@ -80,7 +80,7 @@
 
 1. 确保已经安装 Node.js 和 `@deepseek-ai/dsh`。
 2. 双击 `start-dsh.vbs` 启动。
-3. 在系统托盘中找到 `DSH Web` 图标，双击打开 Web UI。
+3. 在系统托盘中找到 `DSH Web` 图标，双击打开网页。
 
 ## 自检
 
@@ -97,19 +97,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dsh-tray.ps1 -Headless -Head
 
 ## 排查
 
-- 状态目录：`%LOCALAPPDATA%\dsh-tray`（右键托盘「打开状态目录」）。
+- 状态目录：脚本目录下的 `.dsh-tray\`（右键托盘「打开日志」）。
+
+### 状态目录里的文件
+
 - `dsh-tray.log`：托盘自身的决策日志；`runs\run-*.out.log` / `.err.log`：每次运行的 dsh 输出。
 - `state.json`：当前跟踪的子进程与认证 URL。
+- 启动器若放在只读位置（如 `Program Files`），把 `DSH_TRAY_STATE_DIR` 指到可写目录即可。
 - 环境变量（主要用于测试）：`DSH_TRAY_CONFIG`、`DSH_TRAY_STATE_DIR`、`DSH_TRAY_NOBROWSER`、`DSH_TRAY_MUTEX`。
 
 ## 从 v2 迁移
 
-- 日志/状态在 `%LOCALAPPDATA%\dsh-tray`（v2 时代放在脚本目录的 `.dsh-tray\` 已弃用并删除）。
+- 日志/状态在脚本目录的 `.dsh-tray\`（更早的 v3 版本放在 `%LOCALAPPDATA%\dsh-tray`，确认不再需要后可删除）。
 - 单实例互斥体改名为 `DSHWebTray.v3`，与 v2 的 `DSHWebTray` 互不影响。
 - **行为变化**：v2 会「接管」端口上已在运行的 dsh（并在识别失败时强杀端口占用者）；
   v3 不再做任何接管或强杀——端口被占用就另起一个（`--port 0`）。
 - 浏览器 cookie 与 `host:port` 绑定（默认有效期 30 天），所以**保持端口稳定**才能长期免 token 打开；
-  端口变化时用托盘的「打开 Web UI / 复制带 token 的网址」重新认证一次即可。
+  端口变化时用托盘的「打开网页 / 复制链接」重新认证一次即可。
 
 ## 注意
 

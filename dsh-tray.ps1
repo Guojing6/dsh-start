@@ -33,7 +33,9 @@ if ($Headless) {
 $ScriptDir  = $PSScriptRoot
 $VbsPath    = Join-Path $ScriptDir 'start-dsh.vbs'
 $ConfigPath = if ($env:DSH_TRAY_CONFIG)    { $env:DSH_TRAY_CONFIG }    else { Join-Path $ScriptDir 'dsh-tray.config.json' }
-$StateDir   = if ($env:DSH_TRAY_STATE_DIR) { $env:DSH_TRAY_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'dsh-tray' }
+# 默认与启动器同目录（.dsh-tray\），便于「打开日志」直接定位；该目录已被 .gitignore 忽略。
+# 启动器放在只读位置（如 Program Files）时，用 DSH_TRAY_STATE_DIR 指到可写目录。
+$StateDir   = if ($env:DSH_TRAY_STATE_DIR) { $env:DSH_TRAY_STATE_DIR } else { Join-Path $ScriptDir '.dsh-tray' }
 $RunLogDir  = Join-Path $StateDir 'runs'
 $StateFile  = Join-Path $StateDir 'state.json'
 $TrayLog    = Join-Path $StateDir 'dsh-tray.log'
@@ -662,11 +664,11 @@ try {
 }
 
 $menu      = New-Object System.Windows.Forms.ContextMenu
-$miOpen    = New-Object System.Windows.Forms.MenuItem('打开 Web UI')
-$miCopy    = New-Object System.Windows.Forms.MenuItem('复制带 token 的网址')
+$miOpen    = New-Object System.Windows.Forms.MenuItem('打开网页')
+$miCopy    = New-Object System.Windows.Forms.MenuItem('复制链接')
 $miRestart = New-Object System.Windows.Forms.MenuItem('重启服务')
 $miAuto    = New-Object System.Windows.Forms.MenuItem('开机自启')
-$miLogs    = New-Object System.Windows.Forms.MenuItem('打开状态目录')
+$miLogs    = New-Object System.Windows.Forms.MenuItem('打开日志')
 $miQuit    = New-Object System.Windows.Forms.MenuItem('退出')
 $null = $menu.MenuItems.Add($miOpen)
 $null = $menu.MenuItems.Add($miCopy)
@@ -692,7 +694,7 @@ function Open-Ui {
 $miOpen.Add_Click({ Open-Ui })
 $miCopy.Add_Click({
     if ($script:WebUrl) {
-        try { Set-Clipboard -Value $script:WebUrl; Show-Toast '已复制带 token 的网址' }
+        try { Set-Clipboard -Value $script:WebUrl; Show-Toast '已复制链接（含 token）' }
         catch { Show-Toast ('复制失败：' + $_.Exception.Message) 'Error' }
     } else { Show-Toast '服务尚未就绪，暂无可复制的网址' }
 })
