@@ -1,0 +1,34 @@
+#!/bin/sh
+# Reject a commit whose dsh-tray.ps1 has lost its UTF-8 BOM.
+#
+# Windows PowerShell 5.1 decodes a BOM-less file as ANSI, and this script then
+# fails to parse outright ("Unexpected token '}'", "Missing '=' operator after
+# key in hash literal"). Because start-dsh.vbs launches the tray in a hidden
+# window, that failure is silent: no tray icon, no log, no message.
+#
+# Editors and automated rewriting tools drop the BOM without saying so, and the
+# file still looks fine in PowerShell 7 / VS Code, so it is checked here rather
+# than trusted.
+#
+# Enable with:  git config core.hooksPath .githooks
+# Skip once:    git commit --no-verify
+
+file=dsh-tray.ps1
+
+# Nothing to check when the file is not part of the index (e.g. fresh clone).
+git cat-file -e ":$file" 2>/dev/null || exit 0
+
+# Inspect the staged blob, i.e. exactly what this commit would record.
+head_hex=$(git cat-file blob ":$file" | head -c 3 | od -An -tx1 | tr -d ' \n')
+
+if [ "$head_hex" != "efbbbf" ]; then
+    echo "pre-commit: $file is missing its UTF-8 BOM (first bytes: ${head_hex:-<empty>})." >&2
+    echo "            Windows PowerShell 5.1 cannot parse the file without it." >&2
+    echo "            Restore it with:" >&2
+    echo "              \$p = (Resolve-Path '$file').Path" >&2
+    echo "              [System.IO.File]::WriteAllText(\$p, [System.IO.File]::ReadAllText(\$p), (New-Object System.Text.UTF8Encoding(\$true)))" >&2
+    echo "              git add '$file'" >&2
+    exit 1
+fi
+
+exit 0

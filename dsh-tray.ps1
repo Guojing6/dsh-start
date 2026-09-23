@@ -1,12 +1,13 @@
 ﻿#Requires -Version 5.1
 # =============================================================================
-# DSH Web 托盘控制器 v3（精简重写版）
+# DSH Web 托盘控制器 v3（精简重写版）—— 启动器版本见下面的 $ScriptVersion
 # 与 start-dsh.vbs 同目录，双击 start-dsh.vbs 启动。
 #
 # 设计契约 —— 上一版所有故障的根因都在这里被切断：
 #  1) 只管理「自己启动的」子进程：不按端口杀进程、不抢占他人端口、不用 WMI 猜身份。
 #  2) 就绪与认证 URL 只来自「本次运行独占」的 stdout 日志。官方把 URL 行定义为监督方的
-#     就绪信号（@deepseek-ai/dsh-web-app README.zh.md:84）。token 是每进程随机生成、不落盘、
+#     就绪信号（@deepseek-ai/dsh-web-app 的 README.zh.md，0.1.7-alpha.2 下为第 37 行）。
+#     token 是每进程随机生成、不落盘、
 #     不可推导的，所以只能观测不能计算；复用上一次的共享日志必然拿到过期 token。
 #  3) 端口被占用就避让（--port 0 交给系统分配），而不是 taskkill 掉占用者。
 #  4) 状态 JSON 原子读写；用 pid + 启动时刻证明「这是我的孩子」，可跨托盘重启复用自己此前
@@ -40,6 +41,9 @@ $RunLogDir  = Join-Path $StateDir 'runs'
 $StateFile  = Join-Path $StateDir 'state.json'
 $TrayLog    = Join-Path $StateDir 'dsh-tray.log'
 $MutexName  = if ($env:DSH_TRAY_MUTEX) { $env:DSH_TRAY_MUTEX } else { 'DSHWebTray.v3' }
+
+# 启动器版本：与 state.json 的 schema 字段 `version = 3` 无关。行为变更时递增并打同名 tag。
+$ScriptVersion = '3.1.0'
 
 $RunKey  = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $RunName = 'DSH Web Tray'
@@ -118,17 +122,18 @@ function ConvertTo-AsciiJson {
 function Save-State {
     try {
         $state = [ordered]@{
-            version    = 3
-            pid        = $script:ChildPid
-            startedAt  = $script:ChildStartUnix
-            port       = $script:ActualPort
-            url        = $script:WebUrl
-            logFile    = $script:RunOutLog
-            errFile    = $script:RunErrLog
-            profile    = $Config.profile
-            state      = $script:State
-            restarts   = $script:RestartCount
-            updatedAt  = (Get-Date).ToString('o')
+            version         = 3             # schema 版本，与启动器版本无关
+            launcherVersion = $ScriptVersion
+            pid             = $script:ChildPid
+            startedAt       = $script:ChildStartUnix
+            port            = $script:ActualPort
+            url             = $script:WebUrl
+            logFile         = $script:RunOutLog
+            errFile         = $script:RunErrLog
+            profile         = $Config.profile
+            state           = $script:State
+            restarts        = $script:RestartCount
+            updatedAt       = (Get-Date).ToString('o')
         }
         $tmp = $StateFile + '.tmp'
         ($state | ConvertTo-Json -Depth 5) | Set-Content -Path $tmp -Encoding UTF8
@@ -323,7 +328,7 @@ function Update-TrayText {
         default   { '空闲' }
     }
     $portText = if ($script:ActualPort) { [string]$script:ActualPort } else { [string]$Config.preferredPort }
-    $text = "DSH Web · $portText · $label"
+    $text = "DSH Web $ScriptVersion · $portText · $label"
     if ($text.Length -gt 63) { $text = $text.Substring(0, 63) }   # NotifyIcon.Text 上限
     try { $script:Icon.Text = $text } catch { }
 }
@@ -578,7 +583,7 @@ try {
     Write-TrayLog ('单实例检查异常，继续运行：' + $_.Exception.Message)
 }
 
-Write-TrayLog ('托盘启动' + $(if ($Headless) { '（无头模式）' } else { '' }))
+Write-TrayLog ('托盘启动 v' + $ScriptVersion + $(if ($Headless) { '（无头模式）' } else { '' }))
 
 # ------------------------------------------------------------ 无头自测模式
 if ($Headless) {
@@ -608,6 +613,7 @@ if ($Headless) {
 
     # 先取快照，再清理子进程（Stop-OwnChild 会把 pid 清空）
     $snapshot = [ordered]@{
+        version       = $ScriptVersion
         state         = $finalState
         ready         = ($finalState -eq 'ready')
         pid           = $script:ChildPid
@@ -669,6 +675,8 @@ $miCopy    = New-Object System.Windows.Forms.MenuItem('复制链接')
 $miRestart = New-Object System.Windows.Forms.MenuItem('重启服务')
 $miAuto    = New-Object System.Windows.Forms.MenuItem('开机自启')
 $miLogs    = New-Object System.Windows.Forms.MenuItem('打开日志')
+$miAbout   = New-Object System.Windows.Forms.MenuItem(('版本 ' + $ScriptVersion))
+$miAbout.Enabled = $false
 $miQuit    = New-Object System.Windows.Forms.MenuItem('退出')
 $null = $menu.MenuItems.Add($miOpen)
 $null = $menu.MenuItems.Add($miCopy)
@@ -677,6 +685,7 @@ $null = $menu.MenuItems.Add('-')
 $null = $menu.MenuItems.Add($miAuto)
 $null = $menu.MenuItems.Add($miLogs)
 $null = $menu.MenuItems.Add('-')
+$null = $menu.MenuItems.Add($miAbout)
 $null = $menu.MenuItems.Add($miQuit)
 $script:Icon.ContextMenu = $menu
 

@@ -17,6 +17,22 @@
 - `dsh-tray.ps1`：托盘控制器主脚本（v3）。
 - `dsh-tray.config.json`：外置配置（端口、profile、重启策略等）。
 - `harness-logo.png` / `harness-logo.ico`：托盘和窗口图标。
+- `.githooks/pre-commit`：提交时校验 `dsh-tray.ps1` 的 UTF-8 BOM（见「注意」）。
+- `.gitattributes`：固定 `.githooks/*` 的行尾为 LF。
+
+## 版本
+
+当前版本 **v3.1.0**（对应 `git tag v3.1.0`）。版本号定义在 `dsh-tray.ps1` 的 `$ScriptVersion`，
+并暴露在几处便于核对：
+
+- 托盘图标的提示文字：`DSH Web 3.1.0 · 3080 · 运行中`；
+- 右键菜单底部的只读项：`版本 3.1.0`；
+- `dsh-tray.log` 的启动行：`托盘启动 v3.1.0`；
+- `-Headless` 自检输出的 `HEADLESS_RESULT` 里的 `version` 字段；`state.json` 里另有 `launcherVersion`。
+
+> `state.json` 的 `version: 3` 是**状态文件 schema 版本**，与启动器版本无关，两者不要混用。
+
+行为变更时递增 `$ScriptVersion` 并打同名 tag。
 
 ## 设计契约
 
@@ -33,9 +49,32 @@
 5. **native 命令失败绝不能让托盘崩掉**：`$ErrorActionPreference='Stop'` 下 `taskkill` 的
    stderr 会变成终止性错误，因此停止进程有 try/catch + 托管 API 兜底。
 
+## 兼容性
+
+启动器依赖的 dsh 契约只有三条，升级 dsh 后按此核对即可：
+
+1. `dsh --profile <name> --port <n> --no-open` 能被接受（`--port 0` = 交给系统分配端口）；
+2. 子进程 stdout 上出现 `dsh web: http://127.0.0.1:<port>/?token=…` 这一行；
+3. 该 URL 请求返回 303 并种下签名 cookie（浏览器据此免 token 打开）。
+
+**已在 `dsh` 0.1.7-alpha.2 上实测通过**（Windows PowerShell 5.1，隔离 `DSH_HOME` / 状态目录 / 端口）：
+
+| 用例 | 结果 |
+| --- | --- |
+| 常规启动 | `ready`，~3–5 s（含全新 `DSH_HOME` 首次初始化），URL 行与解析正则完全吻合 |
+| 认证链路 | URL → 303 → 跟随后 200 + 含 `__DSH_BOOT__` 的 HTML |
+| 首选端口被占用 | 自动避让 `--port 0`，在系统分配的端口就绪，不碰占用者 |
+
+0.1.6-alpha.2 → 0.1.7-alpha.2 的差异中，**承载上述契约的 `dsh-web-app/lib/index.js` 与
+`lib/startup.js` 字节级未变**，CLI 的改动只涉及 `--dump-config-schema` 等 dump 模式，
+因此启动器无需改动。升级后若启动失败，先看 `.dsh-tray\runs\run-*.out.log` / `.err.log`。
+
+> 注意：dsh 会明确拒绝 `--host 0.0.0.0`（安全考虑），不要把它写进 `extraArgs`。
+
 ## 性能（本机实测）
 
-从启动托盘到服务就绪（Windows PowerShell 5.1 + `dsh` 0.1.6-alpha.2，每个场景取 2 次测量均值）：
+从启动托盘到服务就绪（Windows PowerShell 5.1 + `dsh` 0.1.6-alpha.2 时测得，每个场景取 2 次测量均值；
+0.1.7-alpha.2 下同机复测仍处同一量级，见上面「兼容性」）：
 
 | 场景 | 优化前 | 优化后 |
 | --- | --- | --- |
@@ -102,7 +141,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dsh-tray.ps1 -Headless -Head
 ### 状态目录里的文件
 
 - `dsh-tray.log`：托盘自身的决策日志；`runs\run-*.out.log` / `.err.log`：每次运行的 dsh 输出。
-- `state.json`：当前跟踪的子进程与认证 URL。
+- `state.json`：当前跟踪的子进程与认证 URL，以及写入它的启动器版本（`launcherVersion`）。
 - 启动器若放在只读位置（如 `Program Files`），把 `DSH_TRAY_STATE_DIR` 指到可写目录即可。
 - 环境变量（主要用于测试）：`DSH_TRAY_CONFIG`、`DSH_TRAY_STATE_DIR`、`DSH_TRAY_NOBROWSER`、`DSH_TRAY_MUTEX`。
 
@@ -117,4 +156,36 @@ powershell -NoProfile -ExecutionPolicy Bypass -File dsh-tray.ps1 -Headless -Head
 
 ## 注意
 
-`dsh-tray.ps1` 含中文注释，必须保存为 **UTF-8 with BOM**，否则 Windows PowerShell 5.1 会读成乱码。
+`dsh-tray.ps1` 含中文注释，必须保存为 **UTF-8 with BOM**。
+
+丢掉 BOM 的后果比想象中严重：Windows PowerShell 5.1 会按 ANSI 解码，脚本**直接解析失败**
+（实测报 `Unexpected token '}'` / `Missing '=' operator after key in hash literal`）。而 `start-dsh.vbs`
+是以隐藏窗口拉起托盘的，所以这个失败是**静默**的——没有托盘图标、没有日志、没有提示。
+PowerShell 7 / VS Code 里又完全看不出异常，因此很容易漏掉。
+
+### 提交时拦截
+
+仓库用 `.githooks/pre-commit` 在提交时校验 BOM：
+
+```powershell
+git config core.hooksPath .githooks      # 新克隆后执行一次
+```
+
+hook 检查的是**索引里的 blob**（即真正要提交的内容），缺 BOM 会直接拒绝提交并打印修复命令；
+临时跳过用 `git commit --no-verify`。
+
+### 手动核对与修复
+
+```powershell
+$bytes = [System.IO.File]::ReadAllBytes((Resolve-Path 'dsh-tray.ps1'))
+$bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF   # 必须为 True
+
+# 需要补回 BOM 时：
+$p = (Resolve-Path 'dsh-tray.ps1').Path
+[System.IO.File]::WriteAllText($p, [System.IO.File]::ReadAllText($p), (New-Object System.Text.UTF8Encoding($true)))
+git add dsh-tray.ps1
+```
+
+> 已实测：`git checkout` 会保留 blob 里的 BOM，所以只要提交进去的版本带 BOM，任何克隆出来的副本都正常，
+> 风险只在「本地改写后提交」这一步——正是 hook 拦的位置。另外 `.githooks/*` 在 `.gitattributes` 里固定为 LF：
+> `core.autocrlf` 会给 Git 自带的 sh 一个 CRLF 脚本，那样 hook 根本跑不起来。
